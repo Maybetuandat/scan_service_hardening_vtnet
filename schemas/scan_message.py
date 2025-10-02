@@ -1,6 +1,3 @@
-# hardening_backend/schemas/scan_message.py
-# scan_service/schemas/scan_message.py (copy y hệt)
-
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
@@ -12,8 +9,8 @@ class RuleInfo(BaseModel):
     name: str
     command: str
     parameters: Optional[Dict[str, Any]] = None
-    suggested_fix: Optional[str] = None
-    description: Optional[str] = None
+    
+    
 
 
 class InstanceCredentials(BaseModel):
@@ -57,6 +54,41 @@ class ScanInstanceMessage(BaseModel):
     # Metadata
     timestamp: datetime = Field(default_factory=datetime.now)
     scan_request_id: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class RuleResultInfo(BaseModel):
+    """Thông tin kết quả của một Rule sau khi thực thi, không có liên kết DB"""
+    rule_id: int
+    status: str # "passed", "failed"
+    message: str
+    details_error: Optional[str] = None
+    output: Optional[Dict[str, Any]] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class ScanResponseMessage(BaseModel):
+    """Message phản hồi sau khi một instance được quét xong"""
+    scan_request_id: Optional[str] # Liên kết với request ban đầu
+    instance_id: int
+    instance_name: str
+    workload_id: int
+    user_id: int
+    
+    status: str # "completed", "failed" (tổng thể của instance)
+    detail_error: Optional[str] = None # Lỗi tổng thể nếu không thể quét
+    
+    total_rules: int
+    rules_passed: int
+    rules_failed: int
+    
+    rule_results: List[RuleResultInfo] = Field(default_factory=list)
+    
+    timestamp: datetime = Field(default_factory=datetime.now)
     
     class Config:
         from_attributes = True

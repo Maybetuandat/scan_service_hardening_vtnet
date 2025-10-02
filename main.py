@@ -1,104 +1,90 @@
-# worker_service/main.py
 import logging
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+import time
+import os
+import threading
+from contextlib import contextmanager
+
+
+from config.redis_pubsub import get_pubsub_manager, RedisPubSubManager
 from services.message_consumer import MessageConsumerService
 
-# Setup logging
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO, 
     format='%(asctime)s [%(levelname)s] %(name)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # STARTUP
-    logger.info("🚀 Starting Worker (LOG ONLY MODE)")
+
+@contextmanager
+def worker_lifespan():
+    logger.info("🚀 Starting Worker Service lifespan...")
+    
+    consumer_instance = None
+    pubsub_manager_instance = None
     
     try:
-        consumer = MessageConsumerService.get_instance()
-        consumer.start()
-        app.state.consumer = consumer
-        logger.info("✅ Ready!")
-    except Exception as e:
-        logger.error(f"❌ Startup error: {e}")
+        # 1. Khởi tạo và kiểm tra kết nối Redis
+        pubsub_manager_instance = get_pubsub_manager()
+        if not pubsub_manager_instance.health_check():
+            raise RuntimeError("❌ Failed to connect to Redis. Exiting.")
+        logger.info("✅ Redis connection established.")
+
+        # 2. Khởi tạo và khởi động MessageConsumerService
+        consumer_instance = MessageConsumerService.get_instance()
+        consumer_instance.start()
+        logger.info("✅ MessageConsumerService started.")
+        
+        logger.info("✅ Worker Service is ready and listening for messages!")
+        yield # Worker sẽ chạy ở đây
     
-    yield
+    except Exception as e:
+        logger.critical(f"❌ Worker Service startup critical error: {e}", exc_info=True)
+        # Trong trường hợp lỗi nghiêm trọng khi khởi động, chúng ta thoát
+        # hoặc báo hiệu cho hệ thống quản lý tiến trình.
+        # Ở đây, chúng ta sẽ để nó re-raise và chương trình sẽ thoát.
+        raise
     
-    # SHUTDOWN
-    logger.info("🛑 Shutting down...")
-    try:
-        if hasattr(app.state, 'consumer'):
-            app.state.consumer.stop()
-    except Exception as e:
-        logger.error(f"❌ Shutdown error: {e}")
+    finally:
+        # SHUTDOWN (dù có lỗi startup hay không)
+        logger.info("🛑 Shutting down Worker Service lifespan...")
+        if consumer_instance:
+            try:
+                consumer_instance.stop()
+                logger.info("✅ MessageConsumerService stopped.")
+            except Exception as e:
+                logger.error(f"❌ Error stopping MessageConsumerService: {e}", exc_info=True)
+        
+        if pubsub_manager_instance:
+            try:
+                pubsub_manager_instance.close()
+                logger.info("✅ Redis connections closed.")
+            except Exception as e:
+                logger.error(f"❌ Error closing Redis connections: {e}", exc_info=True)
+        
+        logger.info("✅ Worker Service shutdown complete.")
 
-app = FastAPI(
-    title="Simple Worker Service",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-@app.get("/")
-def root():
-    return {
-        "service": "worker-service",
-        "mode": "log-only",
-        "status": "running"
-    }
-
-@app.get("/health")
-def health():
-    return {"status": "healthy"}
-
-@app.get("/consumer/status")
-def status():
-    try:
-        consumer = MessageConsumerService.get_instance()
-        return {
-            "status": "running" if consumer.is_running else "stopped",
-            "stats": consumer.get_stats()
-        }
-    except Exception as e:
-        return {"status": "error", "error": str(e)}
-
-@app.post("/consumer/start")
-def start():
-    try:
-        consumer = MessageConsumerService.get_instance()
-        if not consumer.is_running:
-            consumer.start()
-            return {"message": "Started"}
-        return {"message": "Already running"}
-    except Exception as e:
-        return {"error": str(e)}
-
-@app.post("/consumer/stop")
-def stop():
-    try:
-        consumer = MessageConsumerService.get_instance()
-        if consumer.is_running:
-            consumer.stop()
-            return {"message": "Stopped"}
-        return {"message": "Not running"}
-    except Exception as e:
-        return {"error": str(e)}
 
 if __name__ == "__main__":
-    import uvicorn
-    import os
+    logger.info("Starting Worker Service as a standalone process.")
     
-    HOST = os.getenv("WORKER_HOST", "0.0.0.0")
-    PORT = int(os.getenv("WORKER_PORT", 8001))
-    
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=True)
+    with worker_lifespan():
+        # Worker sẽ chạy ở đây.
+        # Để giữ cho chương trình chạy vô thời hạn (như một dịch vụ daemon),
+        # chúng ta cần một vòng lặp hoặc chờ đợi một sự kiện dừng.
+        # MessageConsumerService đã chạy trên một luồng riêng (consumer_thread),
+        # nên luồng chính chỉ cần chờ cho đến khi có tín hiệu dừng.
+        # Tuy nhiên, nếu luồng chính thoát, các luồng daemon cũng sẽ bị kill.
+        # Do đó, chúng ta cần một cơ chế chờ.
+
+        # Một cách đơn giản là block luồng chính cho đến khi Ctrl+C (KeyboardInterrupt)
+        # hoặc một tín hiệu dừng được nhận.
+        try:
+            while True:
+                time.sleep(1) # Ngủ luồng chính để tránh ngốn CPU, nhưng vẫn cho phép thoát
+        except KeyboardInterrupt:
+            logger.info("KeyboardInterrupt received. Initiating graceful shutdown.")
+        except Exception as e:
+            logger.error(f"Unhandled exception in main worker loop: {e}", exc_info=True)
+
+    logger.info("Worker Service process exited.")
