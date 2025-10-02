@@ -10,10 +10,10 @@ class RedisSettings(BaseSettings):
     REDIS_PASSWORD: Optional[str] = None
     REDIS_DECODE_RESPONSES: bool = True
     
-    CACHE_BACKEND_KEY: str
-    CACHE_DCIM_KEY: str
-    CACHE_TTL_DCIM_INSTANCES: int
-    CACHE_TTL_BACKEND_INSTANCES: int
+   
+   
+   
+   
 
 
     REDIS_CHANNEL_SCAN_REQUEST: str 
