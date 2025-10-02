@@ -1,0 +1,9 @@
+# FastAPI
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+
+# Redis
+redis==5.0.1
+
+# Environment
+python-dotenv==1.0.1
