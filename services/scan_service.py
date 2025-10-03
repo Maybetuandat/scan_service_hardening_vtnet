@@ -2,13 +2,12 @@ import logging
 import os
 import tempfile
 import yaml 
-import ansible_runner 
+import ansible_runner
 import time 
 from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-# Import các Pydantic models từ schemas
 
 
 # Import RedisPubSubManager

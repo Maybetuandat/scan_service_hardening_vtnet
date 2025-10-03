@@ -92,3 +92,34 @@ class ScanResponseMessage(BaseModel):
     
     class Config:
         from_attributes = True
+class FixRuleResultInfo(BaseModel):
+    """Thông tin kết quả của một Rule sau khi thực thi fix, không có liên kết DB"""
+    rule_id: int
+    status: str # "applied", "failed", "skipped"
+    message: str
+    details_error: Optional[str] = None
+    output: Optional[Dict[str, Any]] = None # Output từ script fix
+
+    class Config:
+        from_attributes = True
+
+class FixResponseMessage(BaseModel):
+    """Message phản hồi sau khi một tác vụ fix được thực thi xong"""
+    job_id: str # ID của tác vụ fix ban đầu (ví dụ: UUID)
+    instance_id: int
+    instance_name: str
+    user_id: int
+    
+    status: str # "completed", "failed" (tổng thể của job fix)
+    detail_message: Optional[str] = None # Lỗi tổng thể nếu không thể fix
+    
+    total_rules_attempted: int
+    rules_applied_success: int
+    rules_applied_failed: int
+    
+    rule_results: List[FixRuleResultInfo] = Field(default_factory=list)
+    
+    timestamp: datetime = Field(default_factory=datetime.now)
+    
+    class Config:
+        from_attributes = True

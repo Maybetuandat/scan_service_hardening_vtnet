@@ -1,9 +1,9 @@
-
 import json
 import redis
 import logging
 from typing import Dict, Any, Callable, Optional
 from datetime import datetime
+from pydantic import BaseModel 
 
 from config.setting_redis import get_redis_settings
 
@@ -30,14 +30,24 @@ class RedisPubSubManager:
         
         logger.info(f"✅ Connected to Redis at {self.settings.REDIS_HOST}:{self.settings.REDIS_PORT}")
     
-    
-    
+    # Helper function to convert datetimes and Pydantic models for JSON serialization
+    def _json_serializer(self, obj):
+        """JSON serializer for objects not serializable by default json code"""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, BaseModel):
+            # Nếu gặp một Pydantic model trong cấu trúc dict, chuyển nó thành dict
+            # Điều này hữu ích nếu bạn có các Pydantic models lồng nhau mà không phải là BaseModel trực tiếp
+            return obj.model_dump() # Dùng model_dump() cho Pydantic v2
+            # Hoặc obj.dict() cho Pydantic v1
+        raise TypeError (f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
     def publish_scan_request(self, data: Dict[str, Any]) -> int:
         """
         Publish scan request message
         
         Args:
-            data: Scan request data (dict)
+            data: Scan request data (dict). Có thể chứa Pydantic models hoặc datetime.
             
         Returns:
             Number of subscribers that received the message
@@ -46,10 +56,11 @@ class RedisPubSubManager:
             message = {
                 "timestamp": datetime.now().isoformat(),
                 "type": "scan_request",
-                "data": data
+                "data": data # data ở đây có thể chứa datetime objects
             }
             
-            message_json = json.dumps(message)
+            # Sử dụng _json_serializer để xử lý datetime và các Pydantic models trong 'data'
+            message_json = json.dumps(message, default=self._json_serializer)
             
             # Publish to channel
             num_subscribers = self.redis_client.publish(
@@ -71,7 +82,7 @@ class RedisPubSubManager:
         Publish scan response message
         
         Args:
-            data: Scan response data (dict)
+            data: Scan response data (dict). Có thể chứa Pydantic models hoặc datetime.
             
         Returns:
             Number of subscribers that received the message
@@ -80,10 +91,11 @@ class RedisPubSubManager:
             message = {
                 "timestamp": datetime.now().isoformat(),
                 "type": "scan_response",
-                "data": data
+                "data": data # data ở đây có thể chứa datetime objects
             }
             
-            message_json = json.dumps(message)
+            # Sử dụng _json_serializer để xử lý datetime và các Pydantic models trong 'data'
+            message_json = json.dumps(message, default=self._json_serializer)
             
             num_subscribers = self.redis_client.publish(
                 self.settings.REDIS_CHANNEL_SCAN_RESPONSE,
@@ -107,7 +119,7 @@ class RedisPubSubManager:
                 "data": data
             }
             
-            message_json = json.dumps(message)
+            message_json = json.dumps(message, default=self._json_serializer)
             
             num_subscribers = self.redis_client.publish(
                 self.settings.REDIS_CHANNEL_FIX_REQUEST,
@@ -131,7 +143,7 @@ class RedisPubSubManager:
                 "data": data
             }
             
-            message_json = json.dumps(message)
+            message_json = json.dumps(message, default=self._json_serializer)
             
             num_subscribers = self.redis_client.publish(
                 self.settings.REDIS_CHANNEL_FIX_RESPONSE,
@@ -237,9 +249,6 @@ class RedisPubSubManager:
             logger.info("🔌 Redis connections closed")
         except Exception as e:
             logger.error(f"❌ Error closing connections: {e}")
-
-
-
 
 _pubsub_manager_instance = None
 
