@@ -9,6 +9,8 @@ class RedisSettings(BaseSettings):
     REDIS_DB: int 
     REDIS_PASSWORD: Optional[str] = None
     REDIS_DECODE_RESPONSES: bool = True
+    
+  
 
 
     REDIS_CHANNEL_SCAN_REQUEST: str 
@@ -26,5 +28,6 @@ class RedisSettings(BaseSettings):
 
 def get_redis_settings():
     return RedisSettings()
+
 
 
