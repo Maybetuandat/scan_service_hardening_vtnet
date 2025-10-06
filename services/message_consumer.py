@@ -7,7 +7,9 @@ from concurrent.futures import ThreadPoolExecutor
 from config.redis_pubsub import get_pubsub_manager, RedisPubSubManager
 
 from schemas.scan_message import ScanInstanceMessage, ScanResponseMessage
-from services.scan_service import ScanService # Import ScanService
+from schemas.fix_message import FixMessage, FixResponseMessage
+from services.scan_service import ScanService
+from services.fix_service import FixService
 
 logger = logging.getLogger(__name__)
 
@@ -19,39 +21,39 @@ class MessageConsumerService:
         if MessageConsumerService._instance is not None:
             raise RuntimeError("Use get_instance() instead")
         
-        self.pubsub_manager = get_pubsub_manager() # Lấy singleton PubSubManager
+        self.pubsub_manager = get_pubsub_manager()
         self.is_running = False
         self.consumer_thread = None
         self.stop_event = threading.Event()
         
-        # Tạo ThreadPoolExecutor dùng chung cho toàn bộ ứng dụng, giới hạn 10 luồng
+        # Tạo ThreadPoolExecutor dùng chung cho toàn bộ ứng dụng
         self.max_workers = 10
         self.thread_pool = ThreadPoolExecutor(max_workers=self.max_workers)
-        self._warm_up_threads() # Khởi động các luồng
+        self._warm_up_threads()
         
-        # Khởi tạo ScanService với thread_pool chung và pubsub_manager
-        # ScanService KHÔNG còn cần db_engine
-        self.scan_service = ScanService(self.thread_pool, self.pubsub_manager) 
+        # Khởi tạo ScanService và FixService với thread_pool chung
+        self.scan_service = ScanService(self.thread_pool, self.pubsub_manager)
+        self.fix_service = FixService(self.thread_pool, self.pubsub_manager)
         
         self.stats = {
             "total_messages_received": 0,
             "scan_requests_processed": 0,
-            "scan_responses_received": 0, # Thêm thống kê response
+            "scan_responses_received": 0,
             "fix_requests_processed": 0,
-            "fix_responses_received": 0, # Thêm thống kê response
+            "fix_responses_received": 0,
             "errors": 0,
             "started_at": None,
             "last_message_at": None,
-            "active_scan_tasks": 0, 
-            "pending_scan_tasks": 0 
+            "active_scan_tasks": 0,
+            "pending_scan_tasks": 0
         }
         
-        logger.info("✅ Consumer initialized (with integrated ScanService and ThreadPool, DB-less for worker)")
+        logger.info("✅ Consumer initialized (with ScanService and FixService, DB-less for worker)")
     
     def _warm_up_threads(self):
         def dummy_task():
             import time
-            time.sleep(0.01)  
+            time.sleep(0.01)
             return "warmed"
         futures = [self.thread_pool.submit(dummy_task) for _ in range(self.max_workers)]
         for future in futures:
@@ -59,7 +61,7 @@ class MessageConsumerService:
         logger.info(f"Thread pool warmed up with {self.max_workers} threads")
 
     @classmethod
-    def get_instance(cls): 
+    def get_instance(cls):
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -75,9 +77,9 @@ class MessageConsumerService:
         
         # Đăng ký lắng nghe cả request và response
         self.pubsub_manager.subscribe_scan_requests()
-        self.pubsub_manager.subscribe_scan_responses() # Mới
+        self.pubsub_manager.subscribe_scan_responses()
         self.pubsub_manager.subscribe_fix_requests()
-        self.pubsub_manager.subscribe_fix_responses() # Mới
+        self.pubsub_manager.subscribe_fix_responses()
         
         self.is_running = True
         self.stop_event.clear()
@@ -103,8 +105,7 @@ class MessageConsumerService:
         if self.consumer_thread:
             self.consumer_thread.join(timeout=timeout)
         
-        # Đóng thread pool một cách an toàn
-        self.thread_pool.shutdown(wait=True) 
+        self.thread_pool.shutdown(wait=True)
         
         self.pubsub_manager.close()
         logger.info("✅ Consumer stopped.")
@@ -113,7 +114,6 @@ class MessageConsumerService:
         logger.info("👂 Listening for messages from Redis Pub/Sub...")
         
         try:
-            # pubsub_manager.listen_for_messages giờ yield dict {"channel": ..., "message": ...}
             for message_envelope in self.pubsub_manager.listen_for_messages():
                 if self.stop_event.is_set():
                     logger.info("Stopping message consumption as stop event is set.")
@@ -134,34 +134,32 @@ class MessageConsumerService:
     def _handle_message_from_broker(self, channel: str, message_payload: Dict[str, Any]):
         """
         Callback để xử lý message nhận được từ Redis Pub/Sub.
-        Phân tích message và gửi tới ScanService hoặc log response.
         """
         try:
             message_type = message_payload.get("type")
-            data = message_payload.get("data", {}) # Data nằm trong key 'data'
+            data = message_payload.get("data", {})
             
             if channel == self.pubsub_manager.settings.REDIS_CHANNEL_SCAN_REQUEST:
                 self.stats["scan_requests_processed"] += 1
-                # Chuyển đổi payload thành ScanInstanceMessage Pydantic model
-                scan_message = ScanInstanceMessage(**data) # data là nội dung của ScanInstanceMessage
+                scan_message = ScanInstanceMessage(**data)
                 self._log_scan_request(scan_message)
-                
-                # Gửi tác vụ quét tới ScanService
                 self.scan_service.submit_scan_task(scan_message)
-                # Note: stats["pending_scan_tasks"] sẽ được cập nhật bởi thread_pool nội bộ
                 
             elif channel == self.pubsub_manager.settings.REDIS_CHANNEL_SCAN_RESPONSE:
                 self.stats["scan_responses_received"] += 1
-                scan_response = ScanResponseMessage(**data) # data là nội dung của ScanResponseMessage
+                scan_response = ScanResponseMessage(**data)
                 self._log_scan_response(scan_response)
                 
             elif channel == self.pubsub_manager.settings.REDIS_CHANNEL_FIX_REQUEST:
                 self.stats["fix_requests_processed"] += 1
-                self._log_fix_request(data) # Giả định data là dict cho fix request
+                fix_message = FixMessage(**data)
+                self._log_fix_request(fix_message)
+                self.fix_service.submit_fix_task(fix_message)
                 
             elif channel == self.pubsub_manager.settings.REDIS_CHANNEL_FIX_RESPONSE:
                 self.stats["fix_responses_received"] += 1
-                self._log_fix_response(data) # Giả định data là dict cho fix response
+                fix_response = FixResponseMessage(**data)
+                self._log_fix_response(fix_response)
                 
             else:
                 logger.warning(f"⚠️ Consumer received message from unknown channel: {channel}. Message type: {message_type}")
@@ -203,35 +201,45 @@ class MessageConsumerService:
                 logger.debug(f"    Output: {rr.output}")
         logger.info("#"*80 + "\n")
 
-    def _log_fix_request(self, data: Dict):
-        import json
+    def _log_fix_request(self, fix_message: FixMessage):
         logger.info("\n" + "="*80)
         logger.info("🔧 RECEIVED FIX REQUEST FROM BROKER")
         logger.info("="*80)
-        logger.info(f"Job ID:       {data.get('job_id')}")
-        logger.info(f"User:         {data.get('username')} (ID: {data.get('user_id')})")
-        logger.info(f"Instances:    {data.get('instance_ids')}")
-        logger.info(f"Rules:        {data.get('rule_ids')}")
-        logger.info(f"Time:         {data.get('timestamp')}")
+        logger.info(f"Fix Request ID: {fix_message.fix_request_id}")
+        logger.info(f"Fix ID:       {fix_message.fix_id}")
+        logger.info(f"IP Address:   {fix_message.ip_address}")
+        logger.info(f"Port:         {fix_message.port}")
+        logger.info(f"User:         {fix_message.ssh_username}")
+        logger.info(f"Fix Type:    {fix_message.fix_type}")
+        logger.info(f"Fix Commands: {len(fix_message.suggest_fix)}")
+        for idx, cmd in enumerate(fix_message.suggest_fix, 1):
+            logger.info(f"  {idx}. {cmd[:100]}{'...' if len(cmd) > 100 else ''}")
+        logger.info(f"Timestamp:    {fix_message.timestamp.isoformat()}")
         logger.info("="*80 + "\n")
 
-    def _log_fix_response(self, data: Dict):
-        import json
+    def _log_fix_response(self, fix_response: FixResponseMessage):
         logger.info("\n" + "#"*80)
-        logger.info("🔧 RECEIVED FIX RESPONSE FROM BROKER")
+        logger.info("✅ RECEIVED FIX RESPONSE FROM BROKER")
         logger.info("#"*80)
-        logger.info(f"Job ID:       {data.get('job_id')}")
-        logger.info(f"Status:       {data.get('status')}")
-        logger.info(f"Time:         {data.get('timestamp')}")
+        logger.info(f"Fix Request ID: {fix_response.fix_request_id}")
+        logger.info(f"Fix ID:       {fix_response.fix_id}")
+        logger.info(f"IP Address:   {fix_response.ip_address}")
+        logger.info(f"Overall Status: {fix_response.status.upper()}")
+        logger.info(f"Total Fixes: {fix_response.total_fixes}, Success: {fix_response.fixes_success}, Failed: {fix_response.fixes_failed}")
+        if fix_response.detail_error:
+            logger.error(f"Error Detail: {fix_response.detail_error}")
+        logger.info("-" * 80)
+        for fr in fix_response.fix_results:
+            logger.info(f"  Fix Command: {fr.fix_command[:60]}... ({fr.status.upper()})")
+            logger.info(f"    Message: {fr.message}")
+            if fr.execution_time:
+                logger.info(f"    Execution Time: {fr.execution_time}s")
+            if fr.details_error:
+                logger.debug(f"    Error: {fr.details_error}")
+            if fr.output:
+                logger.debug(f"    Output: {fr.output[:200]}{'...' if len(fr.output) > 200 else ''}")
         logger.info("#"*80 + "\n")
     
     def get_stats(self):
-        # Cập nhật số lượng tác vụ đang chạy/chờ
-        # Note: self.thread_pool._work_queue.qsize() và _pending_work_items 
-        # là các thuộc tính nội bộ và có thể không phản ánh chính xác 100%
-        # số tác vụ đang chạy/chờ trong mọi thời điểm, nhưng cung cấp một ước tính.
-        self.stats["active_scan_tasks"] = self.thread_pool._work_queue.qsize() # Tác vụ đã được submit và đang chờ
-        # Số luồng thực sự đang bận có thể lấy từ self.thread_pool._threads nếu muốn phức tạp hơn,
-        # nhưng qsize() thường là đủ để biểu thị tải.
-        
+        self.stats["active_scan_tasks"] = self.thread_pool._work_queue.qsize()
         return {**self.stats, "is_running": self.is_running}
