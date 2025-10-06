@@ -208,7 +208,15 @@ class FixService:
                     status = "success"
                     message = "Fix command executed successfully"
                     details_error = None
-                    
+                    print("="*50)
+                    print(f"Fix Command: {fix_command}")
+                    print(f"Status: {status}")
+                    print(f"Message: {message}")
+                    print(f"Output: {output}")
+                    print(f"Error: {error}")
+                    print(f"Return Code: {rc}")
+                    print("="*50)
+
                     if rc != 0:
                         status = "failed"
                         message = "Fix command execution failed"

@@ -18,43 +18,28 @@ fix_data = {
     "user_id": 1,
     "instance_id": 101,
     "timestamp": datetime.now().isoformat(),
-    "suggest_fix": [
-    # Tạo banner với thông tin động
-    "sudo bash -c 'cat > /etc/ssh/banner << \"EOF\"\n"
-    "=======================================================\n"
-    "        WARNING: AUTHORIZED ACCESS ONLY\n"
-    "=======================================================\n"
-    "\n"
-    "Welcome to $(hostname)\n"
-    "System: $(uname -s) $(uname -r)\n"
-    "\n"
-    "This computer system is for authorized users only.\n"
-    "Individuals using this system without authority, or\n"
-    "in excess of their authority, are subject to having\n"
-    "all their activities monitored and recorded.\n"
-    "\n"
-    "Anyone using this system expressly consents to such\n"
-    "monitoring and is advised that if such monitoring\n"
-    "reveals possible criminal activity, system personnel\n"
-    "may provide the evidence to law enforcement officials.\n"
-    "\n"
-    "=======================================================\n"
-    "EOF'",
-    
-    # Enable banner trong SSH config
-    "sudo sed -i 's/^#*Banner.*/Banner \\/etc\\/ssh\\/banner/' /etc/ssh/sshd_config",
-    
-    # Thêm dòng Banner nếu chưa có
-    "grep -q '^Banner' /etc/ssh/sshd_config || echo 'Banner /etc/ssh/banner' | sudo tee -a /etc/ssh/sshd_config",
-    
-    # Set quyền đọc cho mọi user
-    "sudo chmod 644 /etc/ssh/banner",
-    
-    # Test SSH config trước khi restart
-    "sudo sshd -t",
-    
-    # Restart SSH service
-    "sudo systemctl restart sshd || sudo service sshd restart"
+    "suggest_fix":[
+
+    # 1. Xác định process java/tomcat/jre/jdk/kubelet đang chạy bằng root
+    "ps -ef | awk '$1==\"root\" && $8 ~ /(java|tomcat|jre|jdk|kubelet)/{print $2, $8}'",
+
+    # 2. Backup file cấu hình service (ví dụ tomcat)
+    "sudo cp -r /etc/tomcat /etc/tomcat.bak.$(date +%F-%H%M%S) || true",
+
+    # 3. Stop service chạy root (ví dụ tomcat)
+    "sudo systemctl stop tomcat || true",
+
+    # 4. Tạo user dịch vụ (nếu chưa có)
+    "id -u tomcat || sudo useradd -r -s /bin/false tomcat",
+
+    # 5. Cấp quyền sở hữu thư mục cho user dịch vụ
+    "sudo chown -R tomcat:tomcat /opt/tomcat || true",
+
+    # 6. Nếu cần lệnh root thì gán quyền sudo không password cho user dịch vụ
+    "echo 'tomcat ALL=(ALL) NOPASSWD: /bin/systemctl restart tomcat' | sudo tee /etc/sudoers.d/tomcat",
+
+    # 7. Start lại service dưới user dịch vụ
+    "sudo -u tomcat /opt/tomcat/bin/startup.sh || sudo systemctl start tomcat"
 ]
 }
 
